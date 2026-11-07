@@ -1,0 +1,51 @@
+== 1. CLI 도구
+  [OK]   colima:  /opt/homebrew/bin/colima
+  [OK]   docker:  /opt/homebrew/bin/docker
+  [OK]   kind:  /opt/homebrew/bin/kind
+  [OK]   kubectl:  /opt/homebrew/bin/kubectl
+  [OK]   kustomize: {kustomize/v5.8.3  2026-10-08T11:35:59Z   } /opt/homebrew/bin/kustomize
+  [OK]   python3:  /Users/sjkim/.pyenv/shims/python3
+  [OK]   uv:  /Users/sjkim/.pyenv/shims/uv
+  [WARN] kustomize는 5.7.1 권장
+== 2. Colima / Docker 리소스
+time="2026-11-06T12:53:27+09:00" level=info msg="colima is running using macOS Virtualization.Framework"
+time="2026-11-06T12:53:27+09:00" level=info msg="arch: aarch64"
+time="2026-11-06T12:53:27+09:00" level=info msg="runtime: docker"
+CPU=8  MEM=16733798400  Arch=aarch64
+  (Kubeflow 권장: CPU 16 / RAM 32GB. 최소 CPU 8 / RAM 16GB 이상 권장)
+PROFILE    STATUS     ARCH       CPUS    MEMORY    DISK      RUNTIME    ADDRESS
+default    Running    aarch64    8       16GiB     100GiB    docker     
+x86        Stopped    x86_64     8       16GiB     100GiB    docker     
+== 3. kind 클러스터
+myk8s
+kind-myk8s
+NAME                  STATUS   ROLES           AGE   VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION      CONTAINER-RUNTIME
+myk8s-control-plane   Ready    control-plane   12d   v1.34.0   172.18.0.3    <none>        Debian GNU/Linux 12 (bookworm)   6.8.0-117-generic   containerd://2.1.3
+myk8s-worker          Ready    <none>          12d   v1.34.0   172.18.0.4    <none>        Debian GNU/Linux 12 (bookworm)   6.8.0-117-generic   containerd://2.1.3
+myk8s-worker2         Ready    <none>          12d   v1.34.0   172.18.0.2    <none>        Debian GNU/Linux 12 (bookworm)   6.8.0-117-generic   containerd://2.1.3
+myk8s-control-plane  v1.34.0  arm64
+myk8s-worker  v1.34.0  arm64
+myk8s-worker2  v1.34.0  arm64
+== 4. Kubeflow / KServe 파드 (Running/Completed 아닌 것)
+  [OK]   비정상 파드 없음
+-- 핵심 네임스페이스
+  istio-system              3
+  cert-manager              3
+  auth                      1
+  knative-serving           6
+  kubeflow                  34
+  kserve                    0
+  kubeflow-user-example-com 0
+== 5. KServe 설정
+customresourcedefinition.apiextensions.k8s.io/inferenceservices.serving.kserve.io
+kserve/kserve-controller:v0.15.2 quay.io/brancz/kube-rbac-proxy:v0.18.0
+{
+  "defaultDeploymentMode": "Serverless"
+}
+-- 사용자 네임스페이스 / PSS
+NAME                        STATUS   AGE     LABELS
+kubeflow-user-example-com   Active   5d16h   app.kubernetes.io/part-of=kubeflow-profile,istio-injection=enabled,katib.kubeflow.org/metrics-collector-injection=enabled,kubernetes.io/metadata.name=kubeflow-user-example-com
+pod-security.kubernetes.io/enforce=restricted
+== 6. Gateway / 포트
+NAME                   TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                    AGE
+istio-ingressgateway   ClusterIP   10.96.241.187   <none>        15021/TCP,80/TCP,443/TCP   12d

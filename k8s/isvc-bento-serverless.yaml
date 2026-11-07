@@ -1,0 +1,18 @@
+# BentoML 이미지를 KServe Serverless(Knative)로 배포. 요청이 없으면 0개로 줄어든다.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: iris-bento-sl
+  namespace: kubeflow-user-example-com
+spec:
+  predictor:
+    minReplicas: 0                       # knative min-scale 어노테이션은 KServe가 덮어쓰므로 여기서 지정
+    containers:
+      - name: kserve-container
+        image: dev.local/iris-bento:v1   # dev.local/ 접두사: Knative 태그 → digest 변환 생략
+        imagePullPolicy: IfNotPresent
+        ports: [{containerPort: 3000, protocol: TCP}]
+        readinessProbe: {httpGet: {path: /readyz, port: 3000}}
+        resources:
+          requests: {cpu: 250m, memory: 512Mi}
+          limits: {cpu: "1", memory: 1Gi}

@@ -1,0 +1,488 @@
+# PIPELINE DEFINITION
+# Name: iris-train-deploy
+# Description: Iris 학습 → 평가 → KServe 배포
+# Inputs:
+#    accuracy_threshold: float [Default: 0.85]
+#    isvc_name: str [Default: 'iris-kfp']
+#    n_estimators: int [Default: 100.0]
+components:
+  comp-condition-1:
+    dag:
+      tasks:
+        deploy:
+          cachingOptions: {}
+          componentRef:
+            name: comp-deploy
+          inputs:
+            artifacts:
+              model:
+                componentInputArtifact: pipelinechannel--train-model
+            parameters:
+              isvc_name:
+                componentInputParameter: pipelinechannel--isvc_name
+          taskInfo:
+            name: deploy
+        smoke-test:
+          cachingOptions: {}
+          componentRef:
+            name: comp-smoke-test
+          dependentTasks:
+          - deploy
+          inputs:
+            parameters:
+              isvc_name:
+                componentInputParameter: pipelinechannel--isvc_name
+              revision:
+                taskOutputParameter:
+                  outputParameterKey: Output
+                  producerTask: deploy
+          taskInfo:
+            name: smoke-test
+    inputDefinitions:
+      artifacts:
+        pipelinechannel--train-model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        pipelinechannel--accuracy_threshold:
+          parameterType: NUMBER_DOUBLE
+        pipelinechannel--evaluate-Output:
+          parameterType: NUMBER_DOUBLE
+        pipelinechannel--isvc_name:
+          parameterType: STRING
+  comp-deploy:
+    executorLabel: exec-deploy
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        isvc_name:
+          parameterType: STRING
+        timeout_sec:
+          defaultValue: 600.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-evaluate:
+    executorLabel: exec-evaluate
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        test:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
+  comp-load-data:
+    executorLabel: exec-load-data
+    inputDefinitions:
+      parameters:
+        seed:
+          defaultValue: 42.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        test_size:
+          defaultValue: 0.2
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      artifacts:
+        test:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-smoke-test:
+    executorLabel: exec-smoke-test
+    inputDefinitions:
+      parameters:
+        isvc_name:
+          parameterType: STRING
+        revision:
+          parameterType: STRING
+  comp-train:
+    executorLabel: exec-train
+    inputDefinitions:
+      artifacts:
+        train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        n_estimators:
+          defaultValue: 100.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        seed:
+          defaultValue: 42.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-deploy:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - deploy
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kubernetes==31.0.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef deploy(model: Input[Model], isvc_name: str, timeout_sec: int\
+          \ = 600) -> str:\n    \"\"\"KServe \uC6A9 S3 \uC790\uACA9\uC99D\uBA85(Secret/SA)\uC744\
+          \ \uC900\uBE44\uD558\uACE0 InferenceService \uB97C \uC0DD\uC131 \uB610\uB294\
+          \ \uAC31\uC2E0\uD55C\uB2E4.\"\"\"\n    import time\n\n    from kubernetes\
+          \ import client, config\n    from kubernetes.client.rest import ApiException\n\
+          \n    config.load_incluster_config()\n    ns = open(\"/var/run/secrets/kubernetes.io/serviceaccount/namespace\"\
+          ).read().strip()\n    core, crd = client.CoreV1Api(), client.CustomObjectsApi()\n\
+          \n    # 1) KFP \uAC00 \uC4F0\uB294 SeaweedFS \uC790\uACA9\uC99D\uBA85\uC744\
+          \ KServe \uD615\uC2DD(AWS_* \uD0A4 + s3 \uC5B4\uB178\uD14C\uC774\uC158)\uC73C\
+          \uB85C \uC62E\uAE34\uB2E4.\n    #    \uAC12\uC740 \uD074\uB7EC\uC2A4\uD130\
+          \ \uC548\uC5D0\uC11C\uB9CC \uBCF5\uC0AC\uB418\uACE0 \uB85C\uADF8\uC5D0 \uB0A8\
+          \uAE30\uC9C0 \uC54A\uB294\uB2E4.\n    src = core.read_namespaced_secret(\"\
+          mlpipeline-minio-artifact\", ns).data\n    secret = client.V1Secret(\n \
+          \       metadata=client.V1ObjectMeta(name=\"kserve-s3-creds\", annotations={\n\
+          \            \"serving.kserve.io/s3-endpoint\": \"minio-service.kubeflow:9000\"\
+          ,\n            \"serving.kserve.io/s3-usehttps\": \"0\",\n            \"\
+          serving.kserve.io/s3-region\": \"us-east-1\",\n        }),\n        type=\"\
+          Opaque\",\n        data={\"AWS_ACCESS_KEY_ID\": src[\"accesskey\"], \"AWS_SECRET_ACCESS_KEY\"\
+          : src[\"secretkey\"]},\n    )\n    sa = client.V1ServiceAccount(metadata=client.V1ObjectMeta(name=\"\
+          kserve-s3-sa\"),\n                                 secrets=[client.V1ObjectReference(name=\"\
+          kserve-s3-creds\")])\n    for create, replace, body in (\n        (core.create_namespaced_secret,\
+          \ core.replace_namespaced_secret, secret),\n        (core.create_namespaced_service_account,\
+          \ core.replace_namespaced_service_account, sa),\n    ):\n        try:\n\
+          \            create(ns, body)\n        except ApiException as e:\n     \
+          \       if e.status != 409:\n                raise\n            replace(body.metadata.name,\
+          \ ns, body)\n\n    # 2) KFP \uC544\uD2F0\uD329\uD2B8 URI(minio://bucket/key)\
+          \ \u2192 KServe storageUri(s3://bucket/key)\n    storage_uri = model.uri.replace(\"\
+          minio://\", \"s3://\", 1)\n    print(\"storageUri:\", storage_uri)\n\n \
+          \   group, ver, plural = \"serving.kserve.io\", \"v1beta1\", \"inferenceservices\"\
+          \n    spec = {\"predictor\": {\n        \"serviceAccountName\": \"kserve-s3-sa\"\
+          ,\n        \"minReplicas\": 1,\n        \"model\": {\n            \"modelFormat\"\
+          : {\"name\": \"sklearn\"},\n            \"storageUri\": storage_uri,\n \
+          \           \"resources\": {\"requests\": {\"cpu\": \"100m\", \"memory\"\
+          : \"256Mi\"},\n                          \"limits\": {\"cpu\": \"1\", \"\
+          memory\": \"1Gi\"}},\n        },\n    }}\n\n    prev_rev = None\n    try:\n\
+          \        cur = crd.get_namespaced_custom_object(group, ver, ns, plural,\
+          \ isvc_name)\n        prev_rev = cur.get(\"status\", {}).get(\"components\"\
+          , {}).get(\"predictor\", {}).get(\"latestReadyRevision\")\n        crd.patch_namespaced_custom_object(group,\
+          \ ver, ns, plural, isvc_name, {\"spec\": spec})\n        print(f\"patched\
+          \ isvc/{isvc_name} (\uC774\uC804 revision: {prev_rev})\")\n    except ApiException\
+          \ as e:\n        if e.status != 404:\n            raise\n        crd.create_namespaced_custom_object(group,\
+          \ ver, ns, plural, {\n            \"apiVersion\": f\"{group}/{ver}\", \"\
+          kind\": \"InferenceService\",\n            \"metadata\": {\"name\": isvc_name,\
+          \ \"labels\": {\"app\": \"iris-kfp\"}},\n            \"spec\": spec,\n \
+          \       })\n        print(f\"created isvc/{isvc_name}\")\n\n    # 3) \uC0C8\
+          \ revision \uC774 Ready \uAC00 \uB420 \uB54C\uAE4C\uC9C0 \uB300\uAE30 (\uAC31\
+          \uC2E0\uC774\uBA74 revision \uC774\uB984\uC774 \uBC14\uB00C\uC5B4\uC57C\
+          \ \uD55C\uB2E4)\n    deadline = time.time() + timeout_sec\n    while time.time()\
+          \ < deadline:\n        st = crd.get_namespaced_custom_object(group, ver,\
+          \ ns, plural, isvc_name).get(\"status\", {})\n        ready = any(c[\"type\"\
+          ] == \"Ready\" and c[\"status\"] == \"True\" for c in st.get(\"conditions\"\
+          , []))\n        rev = st.get(\"components\", {}).get(\"predictor\", {}).get(\"\
+          latestReadyRevision\")\n        if ready and rev and rev != prev_rev:\n\
+          \            print(f\"Ready: revision={rev} url={st.get('url')}\")\n   \
+          \         return rev\n        time.sleep(10)\n    raise TimeoutError(f\"\
+          isvc/{isvc_name} \uAC00 {timeout_sec}\uCD08 \uC548\uC5D0 Ready \uAC00 \uB418\
+          \uC9C0 \uC54A\uC558\uB2E4\")\n\n"
+        image: python:3.11-slim
+    exec-evaluate:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.5.2'\
+          \ 'numpy==2.0.2' 'joblib==1.4.2' 'pandas==2.2.3'  &&  python3 -m pip install\
+          \ --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate(test: Input[Dataset], model: Input[Model], metrics:\
+          \ Output[Metrics]) -> float:\n    import os\n\n    import joblib\n    import\
+          \ pandas as pd\n    from sklearn.metrics import accuracy_score\n\n    df\
+          \ = pd.read_csv(test.path)\n    clf = joblib.load(os.path.join(model.path,\
+          \ \"model.joblib\"))\n    acc = float(accuracy_score(df[\"target\"].values,\
+          \ clf.predict(df.drop(columns=\"target\").values)))\n    metrics.log_metric(\"\
+          accuracy\", acc)\n    print(f\"accuracy={acc:.4f}\")\n    return acc\n\n"
+        image: python:3.11-slim
+    exec-load-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.5.2'\
+          \ 'numpy==2.0.2' 'joblib==1.4.2' 'pandas==2.2.3'  &&  python3 -m pip install\
+          \ --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_data(train: Output[Dataset], test: Output[Dataset], test_size:\
+          \ float = 0.2, seed: int = 42):\n    from sklearn.datasets import load_iris\n\
+          \    from sklearn.model_selection import train_test_split\n\n    df = load_iris(as_frame=True).frame\
+          \  # \uD2B9\uC131 4\uAC1C + target(0/1/2)\n    tr, te = train_test_split(df,\
+          \ test_size=test_size, random_state=seed, stratify=df[\"target\"])\n   \
+          \ tr.to_csv(train.path, index=False)\n    te.to_csv(test.path, index=False)\n\
+          \    train.metadata[\"rows\"] = len(tr)\n    test.metadata[\"rows\"] = len(te)\n\
+          \n"
+        image: python:3.11-slim
+    exec-smoke-test:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - smoke_test
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'requests==2.32.3'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef smoke_test(isvc_name: str, revision: str):\n    \"\"\"revision\
+          \ \uC758 private \uC11C\uBE44\uC2A4(queue-proxy)\uB85C \uC9C1\uC811 \uC608\
+          \uCE21\uC744 \uC694\uCCAD\uD574 \uC751\uB2F5\uC744 \uD655\uC778\uD55C\uB2E4\
+          .\n\n    Kubeflow \uD504\uB85C\uD544 \uB124\uC784\uC2A4\uD398\uC774\uC2A4\
+          \uB294 '\uAC19\uC740 \uB124\uC784\uC2A4\uD398\uC774\uC2A4\uC758 \uBA54\uC2DC\
+          \ \uC6CC\uD06C\uB85C\uB4DC'\uB9CC \uD5C8\uC6A9\uD558\uBBC0\uB85C,\n    \uC774\
+          \ \uCEF4\uD3EC\uB10C\uD2B8 \uD30C\uB4DC\uC5D0\uB294 \uD30C\uC774\uD504\uB77C\
+          \uC778 \uC815\uC758\uC5D0\uC11C Istio \uC0AC\uC774\uB4DC\uCE74\uB97C \uBD99\
+          \uC778\uB2E4 (KFP \uAE30\uBCF8\uAC12\uC740 \uC0AC\uC774\uB4DC\uCE74 \uC5C6\
+          \uC74C).\n    \"\"\"\n    import requests\n\n    ns = open(\"/var/run/secrets/kubernetes.io/serviceaccount/namespace\"\
+          ).read().strip()\n    url = f\"http://{revision}-private.{ns}.svc.cluster.local/v1/models/{isvc_name}:predict\"\
+          \n    body = {\"instances\": [[5.1, 3.5, 1.4, 0.2], [6.0, 3.4, 4.5, 1.6],\
+          \ [6.7, 3.0, 5.2, 2.3]]}\n    r = requests.post(url, json=body, timeout=30)\n\
+          \    print(r.status_code, r.text)\n    r.raise_for_status()\n    preds =\
+          \ r.json()[\"predictions\"]\n    assert preds == [0, 1, 2], f\"\uC608\uC0C1\
+          \uACFC \uB2E4\uB978 \uC608\uCE21: {preds}\"\n\n"
+        image: python:3.11-slim
+    exec-train:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.5.2'\
+          \ 'numpy==2.0.2' 'joblib==1.4.2' 'pandas==2.2.3'  &&  python3 -m pip install\
+          \ --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train(train: Input[Dataset], model: Output[Model], n_estimators:\
+          \ int = 100, seed: int = 42):\n    import os\n\n    import joblib\n    import\
+          \ pandas as pd\n    from sklearn.ensemble import RandomForestClassifier\n\
+          \n    df = pd.read_csv(train.path)\n    clf = RandomForestClassifier(n_estimators=n_estimators,\
+          \ random_state=seed)\n    clf.fit(df.drop(columns=\"target\").values, df[\"\
+          target\"].values)\n\n    # KServe sklearn \uB7F0\uD0C0\uC784\uC740 \uB514\
+          \uB809\uD130\uB9AC \uC548\uC758 model.joblib \uC744 \uC77D\uB294\uB2E4\n\
+          \    os.makedirs(model.path, exist_ok=True)\n    joblib.dump(clf, os.path.join(model.path,\
+          \ \"model.joblib\"))\n    model.metadata[\"framework\"] = \"sklearn\"\n\
+          \    model.metadata[\"n_estimators\"] = n_estimators\n\n"
+        image: python:3.11-slim
+pipelineInfo:
+  description: "Iris \uD559\uC2B5 \u2192 \uD3C9\uAC00 \u2192 KServe \uBC30\uD3EC"
+  name: iris-train-deploy
+root:
+  dag:
+    tasks:
+      condition-1:
+        componentRef:
+          name: comp-condition-1
+        dependentTasks:
+        - evaluate
+        - train
+        inputs:
+          artifacts:
+            pipelinechannel--train-model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train
+          parameters:
+            pipelinechannel--accuracy_threshold:
+              componentInputParameter: accuracy_threshold
+            pipelinechannel--evaluate-Output:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: evaluate
+            pipelinechannel--isvc_name:
+              componentInputParameter: isvc_name
+        taskInfo:
+          name: accuracy-gate
+        triggerPolicy:
+          condition: inputs.parameter_values['pipelinechannel--evaluate-Output'] >=
+            inputs.parameter_values['pipelinechannel--accuracy_threshold']
+      evaluate:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate
+        dependentTasks:
+        - load-data
+        - train
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train
+            test:
+              taskOutputArtifact:
+                outputArtifactKey: test
+                producerTask: load-data
+        taskInfo:
+          name: evaluate
+      load-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-data
+        taskInfo:
+          name: load-data
+      train:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train
+        dependentTasks:
+        - load-data
+        inputs:
+          artifacts:
+            train:
+              taskOutputArtifact:
+                outputArtifactKey: train
+                producerTask: load-data
+          parameters:
+            n_estimators:
+              componentInputParameter: n_estimators
+        taskInfo:
+          name: train
+  inputDefinitions:
+    parameters:
+      accuracy_threshold:
+        defaultValue: 0.85
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      isvc_name:
+        defaultValue: iris-kfp
+        isOptional: true
+        parameterType: STRING
+      n_estimators:
+        defaultValue: 100.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.15.2
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-smoke-test:
+          podMetadata:
+            labels:
+              sidecar.istio.io/inject: 'true'

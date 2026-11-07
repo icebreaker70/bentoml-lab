@@ -1,0 +1,38 @@
+# 10분마다 최근 추론 로그로 Evidently 드리프트 리포트를 만든다
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: drift-report
+  namespace: kubeflow-user-example-com
+spec:
+  schedule: "*/10 * * * *"
+  timeZone: "Asia/Seoul"
+  concurrencyPolicy: Forbid           # 이전 리포트가 끝나지 않았으면 이번 회차는 건너뛴다
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app: drift-report
+            sidecar.istio.io/inject: "false"
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: report
+            image: dev.local/drift-lab:v1
+            imagePullPolicy: IfNotPresent
+            command: ["python", "drift_job.py", "report"]
+            envFrom: [{configMapRef: {name: drift-lab-config}}]
+            env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: mlpipeline-minio-artifact, key: accesskey}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: mlpipeline-minio-artifact, key: secretkey}}
+            resources:
+              requests: {cpu: 200m, memory: 512Mi}
+              limits: {cpu: "1", memory: 1Gi}

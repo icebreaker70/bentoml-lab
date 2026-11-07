@@ -1,0 +1,19 @@
+# BentoML 이미지를 KServe RawDeployment(일반 Deployment + ClusterIP Service)로 배포
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: iris-bento
+  namespace: kubeflow-user-example-com
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    containers:
+      - name: kserve-container
+        image: dev.local/iris-bento:v1   # kind load 로 넣은 로컬 이미지
+        imagePullPolicy: IfNotPresent
+        ports: [{containerPort: 3000, protocol: TCP}]
+        readinessProbe: {httpGet: {path: /readyz, port: 3000}}
+        resources:
+          requests: {cpu: 250m, memory: 512Mi}
+          limits: {cpu: "1", memory: 1Gi}

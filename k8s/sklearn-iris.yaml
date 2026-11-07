@@ -1,0 +1,14 @@
+# KServe 내장 sklearn 런타임 (Serverless). 공개 예제 모델을 GCS에서 받아 서빙한다.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: sklearn-iris
+  namespace: kubeflow-user-example-com
+spec:
+  predictor:
+    model:
+      modelFormat: {name: sklearn}
+      storageUri: gs://kfserving-examples/models/sklearn/1.0/model
+      resources:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: "1", memory: 1Gi}

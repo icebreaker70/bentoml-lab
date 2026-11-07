@@ -1,0 +1,47 @@
+# KServe logger 이벤트를 받아 SeaweedFS(S3)에 JSONL 로 저장하는 수신기.
+# 같은 네임스페이스의 predictor 파드(사이드카 포함)가 보내므로 ns-owner-access-istio 정책을 통과한다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-logger
+  namespace: kubeflow-user-example-com
+  labels: {app: inference-logger}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: inference-logger}
+  template:
+    metadata:
+      labels: {app: inference-logger}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: logger
+        image: dev.local/drift-lab:v1
+        imagePullPolicy: IfNotPresent
+        command: ["python", "logger_server.py"]
+        ports:
+        - {name: http, containerPort: 8080}
+        envFrom: [{configMapRef: {name: drift-lab-config}}]   # S3_ENDPOINT, S3_BUCKET, S3_PREFIX
+        env:
+        - {name: FLUSH_EVENTS, value: "50"}
+        - {name: FLUSH_SECONDS, value: "30"}
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom: {secretKeyRef: {name: mlpipeline-minio-artifact, key: accesskey}}
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom: {secretKeyRef: {name: mlpipeline-minio-artifact, key: secretkey}}
+        readinessProbe:
+          httpGet: {path: /healthz, port: 8080}
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: 500m, memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-logger
+  namespace: kubeflow-user-example-com
+spec:
+  selector: {app: inference-logger}
+  ports:
+  - {name: http, port: 80, targetPort: 8080}

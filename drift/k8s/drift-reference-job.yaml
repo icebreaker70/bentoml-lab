@@ -1,0 +1,30 @@
+# 기준(reference) 데이터를 S3 에 올리는 1회성 Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: drift-reference
+  namespace: kubeflow-user-example-com
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: drift-report
+        sidecar.istio.io/inject: "false"   # 메시 밖에서 S3/Pushgateway/MLflow 만 호출하는 배치 작업
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: reference
+        image: dev.local/drift-lab:v1
+        imagePullPolicy: IfNotPresent
+        command: ["python", "drift_job.py", "reference"]
+        envFrom: [{configMapRef: {name: drift-lab-config}}]
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom: {secretKeyRef: {name: mlpipeline-minio-artifact, key: accesskey}}
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom: {secretKeyRef: {name: mlpipeline-minio-artifact, key: secretkey}}
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: "1", memory: 1Gi}

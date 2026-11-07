@@ -1,0 +1,16 @@
+# drift-lab 공통 설정 (inference-logger, drift-reference, drift-report 가 envFrom 으로 읽는다)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drift-lab-config
+  namespace: kubeflow-user-example-com
+data:
+  S3_ENDPOINT: "http://minio-service.kubeflow:9000"
+  S3_BUCKET: "mlpipeline"
+  S3_PREFIX: "private-artifacts/kubeflow-user-example-com/drift-lab"
+  ISVC_NAME: "iris-drift"
+  WINDOW_MINUTES: "60"          # 직전 리포트 이후의 로그를 보되, 최대 60분 전까지만
+  MIN_ROWS: "30"                # 이보다 적으면 통계 검정이 의미 없어 건너뛴다
+  DRIFT_SHARE: "0.5"            # 드리프트 컬럼 비율 ≥ 0.5 이면 데이터셋 드리프트
+  PUSHGATEWAY_URL: "http://prometheus-prometheus-pushgateway.prometheus:9091"
+  MLFLOW_TRACKING_URI: "http://mlflow.mlflow.svc.cluster.local"

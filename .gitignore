@@ -1,0 +1,29 @@
+# Docs & backups (not uploaded to GitHub)
+*.md
+!README.md
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# BentoML build outputs
+bentoml/
+*.bento
+
+# Secrets / local env
+.env
+.env.*
+*.pem
+*.key
+kubeconfig*
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp

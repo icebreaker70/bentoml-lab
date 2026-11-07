@@ -1,0 +1,6 @@
+evidently==0.7.23
+pandas==2.3.3        # evidently 0.7.23 은 pandas 3.x 에서 import 오류가 난다
+scikit-learn==1.7.2
+boto3==1.43.125
+requests==2.32.5
+mlflow-skinny==3.16.0  # 서버(burakince/mlflow:3.16.0)와 맞춘다
